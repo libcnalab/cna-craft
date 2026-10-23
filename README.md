@@ -48,7 +48,9 @@ openeggbert/
 
 - CMake 3.21+
 - A C++23-capable compiler (GCC 12+ or Clang 15+)
-- `../cna` and `../sharp-runtime` present next to this repo (or pass `-DCNA_HOME=<path>`)
+- `../cna` and `../sharp-runtime` present next to this repo (or pass `-DCNA_HOME=<path>`). When
+  there is no `../cna`, the build falls back to the `libcnalab/` + `libcna/` workspace layout and
+  uses `../../libcna/cna` (CNA then finds its own sibling `../sharp-runtime`)
 - SQLite 3 development files (e.g. `libsqlite3-dev` on Debian/Ubuntu) — used for world persistence
   (see §5); found via CMake's built-in `FindSQLite3` module, no vendoring/network fetch needed
 
@@ -65,9 +67,17 @@ the OpenGL family (`OPENGLES3` default on Linux, or `OPENGLES2`/`OPENGL33`), `VU
 
 ```bash
 git submodule update --init --recursive   # only needed the first time, inside ../cna
-cmake -S . -B build -DCNA_GRAPHICS_RENDERER=OPENGLES3   # or VULKAN, or BGFX
-cmake --build build --target CnaCraft
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCNA_GRAPHICS_RENDERER=OPENGLES3   # or VULKAN, or BGFX
+cmake --build build --target CnaCraft CnaCraftServer --parallel 3
+ctest --test-dir build                    # engine-agnostic + networking smoke tests
 ```
+
+The game uses 32-bit index buffers, so it requests XNA's `HiDef` graphics profile (CNA, like
+XNA 4.0, defaults to `Reach`). All render state goes through XNA's `BlendState` /
+`DepthStencilState` objects rather than CNA's `Set*Enabled` extensions, which would bypass the
+device's state cache and leave the HUD's `SpriteBatch` without alpha blending.
 
 ### 4.1 Web build (Emscripten / WebAssembly)
 
@@ -77,22 +87,28 @@ day/night sky and the full HUD intact:
 
 ```bash
 source /path/to/emsdk/emsdk_env.sh
-embuilder build zlib                          # one-off: sharp-runtime needs zlib
 
 # Portable single-thread build (the default): works in Firefox and Chromium.
-emcmake cmake -S . -B build-web -DCNA_GRAPHICS_RENDERER=WEBGL2
-cmake --build build-web --target CnaCraft
+emcmake cmake -S . -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCNA_GRAPHICS_RENDERER=WEBGL2
+cmake --build build-consumer --target CnaCraft --parallel 3
 
-python3 web/serve.py 8000 build-web           # then open http://localhost:8000/CnaCraft.html
+python3 web/serve.py 8000 build-consumer      # then open http://localhost:8000/CnaCraft.html
 ```
+
+The build follows CNA's current Emscripten contract: every object uses CNA's JS-lowered exception
+ABI (`-fexceptions`, linked through `CNA::EmscriptenExceptionAbi`), and the blocking
+`Game::Run` loop yields to the browser through Asyncify (`CNA::EmscriptenAsyncify`).
 
 The default web build is **single-threaded**, which is the reliable choice for Firefox and needs
 no special response headers. Generation and meshing happen on the main thread, so frames can
-stutter while new terrain streams in, but the page stays responsive. For a tested Chromium-only
-deployment, enable Emscripten pthreads with
-`CFLAGS=-pthread CXXFLAGS=-pthread emcmake cmake -S . -B build-web -DCNA_GRAPHICS_RENDERER=WEBGL2 -DCNA_CRAFT_WASM_THREADS=ON`.
-That mode needs a `SharedArrayBuffer`, so the server must send
-`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` —
+stutter while new terrain streams in, but the page stays responsive. For a Chromium-only
+deployment, enable Emscripten pthreads with `-DCNA_CRAFT_WASM_THREADS=ON` at configure time; it
+also turns on `CNA_ENABLE_EMSCRIPTEN_THREADS`, so CNA, sharp-runtime and CNA's SDL prebuilt use the
+same shared-memory ABI (no `CFLAGS`/`CXXFLAGS` exports needed any more). The threaded variant has
+not been re-verified against the current CNA. It needs a `SharedArrayBuffer`, so the server must
+send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` —
 `web/serve.py` does exactly that (plain `python3 -m http.server` does not).
 
 Other web-specific differences, all deliberate: **single-player only** (a browser page cannot host

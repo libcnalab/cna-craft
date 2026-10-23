@@ -50,6 +50,9 @@ void SelectionOutline::Update(GraphicsDevice& device, int bx, int by, int bz) {
         ib_ = std::make_unique<IndexBuffer>(device, IndexElementSize::SixteenBits, 24, BufferUsage::None);
         ib_->SetData(kIndices, 24);
     }
+    // XNA forbids SetData on a vertex buffer still bound to the device, and
+    // last frame's Draw left vb_ bound.
+    device.SetVertexBuffer(nullptr);
     vb_->SetData(verts, 8);
 }
 

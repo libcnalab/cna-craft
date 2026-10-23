@@ -89,6 +89,9 @@ void SkyDome::Update(GraphicsDevice& device, float timeOfDay) {
         ib_->SetData(indices.data(), static_cast<int>(indices.size()));
         primitiveCount_ = static_cast<int>(indices.size() / 3);
     }
+    // XNA forbids SetData on a vertex buffer still bound to the device, and
+    // last frame's Draw left vb_ bound.
+    device.SetVertexBuffer(nullptr);
     vb_->SetData(vertices.data(), static_cast<int>(vertices.size()));
 }
 

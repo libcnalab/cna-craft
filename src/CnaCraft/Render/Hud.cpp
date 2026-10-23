@@ -152,7 +152,8 @@ void Hud::Draw(GraphicsDevice& device) {
     const int sw = vp.getWidthProperty();
     const int sh = vp.getHeightProperty();
 
-    device.SetDepthTestEnabled(false);
+    // Begin() applies AlphaBlend + DepthStencilState::None itself; the next
+    // frame's Draw restores the 3D states.
     spriteBatch_->Begin();
 
     const int crossSize = std::max(20, static_cast<int>(sh * 0.02f));
@@ -231,7 +232,6 @@ void Hud::Draw(GraphicsDevice& device) {
         Color(255, 255, 255, 255));
 
     spriteBatch_->End();
-    device.SetDepthTestEnabled(true);
 }
 
 }

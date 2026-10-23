@@ -96,19 +96,25 @@ endif()
 # =============================================================================
 option(CNA_CRAFT_BUILD_GAME "Build the graphical CnaCraft executable (requires ../cna and ../sharp-runtime)" ON)
 
+# Wasm exceptions: CNA throws through its JS-lowered exception ABI
+# (CNA::EmscriptenExceptionAbi, -fexceptions), and every C++ frame an
+# exception can cross must be compiled the same way -- including
+# CnaCraftWorlds/CnaCraftNetProtocol, which exist before CNA is added, so the
+# flag is directory-wide here rather than inherited from a CNA target.
+#
 # Wasm threads (plan.md §12.1 item 37): -pthread must reach EVERY object --
 # game, CnaCraftWorlds, CNA, easy-gl, sharp-runtime, SDL -- or wasm-ld refuses
 # to link ("--shared-memory is disallowed by X.o because it was not compiled
 # with 'atomics'"). Setting it here, BEFORE add_subdirectory(CNA), covers
-# everything built in this tree; CNA's SDL prebuilt is a separate cmake
-# invocation that inherits only the ENVIRONMENT, which is why the documented
-# configure line also exports CFLAGS/CXXFLAGS (see README §4.1). Opt out with
+# this project's own targets; CNA_ENABLE_EMSCRIPTEN_THREADS (set below) makes
+# CNA, sharp-runtime and CNA's SDL prebuilt use the same shared-memory ABI.
 # The portable default leaves threads off: Firefox can start a threaded Wasm
 # build but may permanently stall after worker-heavy terrain streaming. Opt in
 # with -DCNA_CRAFT_WASM_THREADS=ON on tested Chromium hosting; that needs
 # COOP/COEP headers. Without threads generation/meshing runs on the main
 # thread, so terrain streaming can visibly stutter.
 if(EMSCRIPTEN)
+    add_compile_options(-fexceptions)
     option(CNA_CRAFT_WASM_THREADS "Build the web target with Emscripten pthreads (needs COOP/COEP hosting)" OFF)
     # Keep the render loop on the browser thread by default. Firefox accepts
     # the threaded Wasm module but does not present Emscripten's proxied
@@ -120,12 +126,25 @@ if(EMSCRIPTEN)
         add_compile_options(-pthread)
         add_link_options(-pthread)
     endif()
+    set(CNA_ENABLE_EMSCRIPTEN_THREADS ${CNA_CRAFT_WASM_THREADS} CACHE BOOL
+        "Follows CNA_CRAFT_WASM_THREADS" FORCE)
 endif()
 
 if(CNA_CRAFT_BUILD_GAME)
-    set(CNA_HOME "" CACHE PATH "Path to the CNA source directory. Defaults to ../cna.")
+    set(CNA_HOME "" CACHE PATH
+        "Path to the CNA source directory. Defaults to ../cna, else ../../libcna/cna.")
     if(NOT CNA_HOME)
-        set(CNA_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../cnanext")
+        # A sibling ../cna wins (README §3); otherwise the libcnalab/ + libcna/
+        # workspace layout, where this repo sits in libcnalab/ and CNA (with
+        # its own sibling sharp-runtime) in libcna/.
+        foreach(_cna_craft_candidate IN ITEMS
+                "${CMAKE_CURRENT_SOURCE_DIR}/../cna"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../libcna/cna")
+            if(EXISTS "${_cna_craft_candidate}/CMakeLists.txt")
+                get_filename_component(CNA_HOME "${_cna_craft_candidate}" ABSOLUTE)
+                break()
+            endif()
+        endforeach()
     endif()
 
     if(NOT EXISTS "${CNA_HOME}/CMakeLists.txt")
@@ -312,18 +331,16 @@ if(CNA_CRAFT_BUILD_GAME)
         # SDL3 (CNA's vendored static libSDL3.a) flows transitively through
         # CNA::Runtime. Naming SDL3::SDL3 here directly would fail at generate
         # time because it is imported only in the CNA subdirectory.
+        # CNA::EmscriptenExceptionAbi links CNA's JS-lowered exception ABI
+        # (the compile side is the directory-wide -fexceptions above);
+        # CNA::EmscriptenAsyncify lets the blocking Game::Run loop yield to
+        # the browser between frames.
         target_link_libraries(CnaCraft PRIVATE
             CNA::Runtime
             CnaCraftWorlds
             CnaCraftNetTransport
-        )
-        # CNA configures the current Emscripten Wasm exception ABI in its
-        # own directory scope. CnaCraft is a parent-directory target, so it
-        # must explicitly compile and link with the same ABI; otherwise
-        # wasm-ld cannot resolve CNA's __cpp_exception symbols.
-        target_compile_options(CnaCraft PRIVATE
-            -fwasm-exceptions
-            -sWASM_LEGACY_EXCEPTIONS=0
+            CNA::EmscriptenExceptionAbi
+            CNA::EmscriptenAsyncify
         )
         target_link_options(CnaCraft PRIVATE
             # FIXED 512 MB heap, deliberately NO -sALLOW_MEMORY_GROWTH: a
@@ -348,8 +365,6 @@ if(CNA_CRAFT_BUILD_GAME)
             # deadlocks. It is meaningless for the compatible single-thread
             # build, so do not pass it there.
             $<$<BOOL:${CNA_CRAFT_WASM_THREADS}>:-sPTHREAD_POOL_SIZE=16>
-            -fwasm-exceptions
-            -sWASM_LEGACY_EXCEPTIONS=0
             # When explicitly requested, move main() to a worker and proxy
             # its GL calls through an offscreen framebuffer. The default is
             # browser-main-thread rendering: it works in Firefox and still

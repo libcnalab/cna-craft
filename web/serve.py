@@ -11,7 +11,7 @@ only expose to *cross-origin isolated* pages -- meaning the server must send:
 `python3 -m http.server` sends neither, so the page loads without
 SharedArrayBuffer and the runtime refuses to start. Use this instead:
 
-    python3 web/serve.py 8000 build-web      # then open http://localhost:8000/CnaCraft.html
+    python3 web/serve.py 8000 build-consumer # then open http://localhost:8000/CnaCraft.html
 
 Any production host works too, as long as it sends those two headers (GitHub
 Pages does not; Netlify/Cloudflare/nginx can be configured to).
@@ -33,7 +33,7 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
 
 def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    directory = sys.argv[2] if len(sys.argv) > 2 else "build-web"
+    directory = sys.argv[2] if len(sys.argv) > 2 else "build-consumer"
     handler = functools.partial(CrossOriginIsolatedHandler, directory=directory)
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.ThreadingTCPServer(("", port), handler) as httpd:

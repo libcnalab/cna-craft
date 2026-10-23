@@ -11,13 +11,16 @@
 
 #include "Microsoft/Xna/Framework/BoundingFrustum.hpp"
 #include "Microsoft/Xna/Framework/Color.hpp"
+#include "Microsoft/Xna/Framework/Graphics/BlendState.hpp"
 #include "Microsoft/Xna/Framework/Graphics/ClearOptions.hpp"
+#include "Microsoft/Xna/Framework/Graphics/DepthStencilState.hpp"
 #include "Microsoft/Xna/Framework/Graphics/Viewport.hpp"
 #include "Microsoft/Xna/Framework/Input/Keyboard.hpp"
 #include "Microsoft/Xna/Framework/Input/Keys.hpp"
 #include "Microsoft/Xna/Framework/Input/Mouse.hpp"
 #include "Microsoft/Xna/Framework/Input/TextInputEXT.hpp"
 #include "Microsoft/Xna/Framework/Graphics/GraphicsDevice.hpp"
+#include "Microsoft/Xna/Framework/Graphics/GraphicsProfile.hpp"
 #include "Microsoft/Xna/Framework/Graphics/SamplerState.hpp"
 #include "Microsoft/Xna/Framework/Matrix.hpp"
 
@@ -122,6 +125,11 @@ constexpr int kMaxColumnLoadsPerFrame = 2;
 }
 
 CnaCraftGame::CnaCraftGame() : graphics_(this) {
+    // ChunkRenderer and PlayerCube upload 32-bit index buffers, a HiDef-only
+    // feature. XNA's (and current CNA's) default profile is Reach, which
+    // rejects them at IndexBuffer construction.
+    graphics_.setGraphicsProfileProperty(GraphicsProfile::HiDef);
+
     static constexpr int kFps = 60;
     setTargetElapsedTimeProperty(System::TimeSpan::FromTicks(static_cast<long>(10000000L / kFps)));
 }
@@ -135,7 +143,7 @@ void CnaCraftGame::Initialize() {
     Game::Initialize();
 
     auto& device = getGraphicsDeviceProperty();
-    device.SetDepthTestEnabled(true);
+    device.setDepthStencilStateProperty(DepthStencilState::Default);
 
     Mouse::setIsRelativeMouseModeEXTProperty(true);
 
@@ -1629,7 +1637,13 @@ void CnaCraftGame::Draw(const GameTime& gameTime) {
     // outside the dome consistent with it.
     const Color horizonSky = Render::SampleSkyColor(timeOfDay, 0.5f);
     device.Clear(horizonSky, 1.0f);
-    device.SetDepthTestEnabled(true);
+    // Last frame's HUD SpriteBatch left AlphaBlend and DepthStencilState::None
+    // on the device. All render state goes through XNA's state objects (not
+    // CNA's Set*Enabled extensions, which bypass them): the device caches
+    // these objects, so a raw extension call would leave that cache stale
+    // and a later SpriteBatch::Begin(AlphaBlend) would never re-enable blending.
+    device.setBlendStateProperty(BlendState::Opaque);
+    device.setDepthStencilStateProperty(DepthStencilState::Default);
 
     // Distance fog (CRAFT_PARITY.md §5.2) — fades geometry toward the same
     // flat sky color used for the clear, so the streamed region's edge
@@ -1766,7 +1780,7 @@ void CnaCraftGame::RenderScene(GraphicsDevice& device, const Vector3& eyeVec, co
     // pass), lighting goes off; everything restored for terrain right
     // after. (skyDome_.Update already ran in Draw -- time-of-day is
     // camera-independent, shared by the main render and the PIP inset.)
-    device.SetDepthWriteEnabled(false);
+    device.setDepthStencilStateProperty(DepthStencilState::DepthRead);
     const bool fogWasEnabled = effect_->getFogEnabledProperty();
     effect_->setFogEnabledProperty(false);
     effect_->setTextureProperty(skyTexture_.get());
@@ -1778,7 +1792,7 @@ void CnaCraftGame::RenderScene(GraphicsDevice& device, const Vector3& eyeVec, co
     device.getSamplerStatesProperty()[0] = SamplerState::PointClamp;
     effect_->setTextureProperty(atlasTexture_.get());
     effect_->setFogEnabledProperty(fogWasEnabled);
-    device.SetDepthWriteEnabled(true);
+    device.setDepthStencilStateProperty(DepthStencilState::Default);
 
     // Terrain state (plan.md §12.1 item 12): VertexColorEnabled stays ON and
     // lighting stays OFF from the sky pass -- chunk terrain is now the
@@ -1900,9 +1914,10 @@ void CnaCraftGame::RenderScene(GraphicsDevice& device, const Vector3& eyeVec, co
     // Transparent geometry (plan.md §11.2 "Transparency for glass") is drawn
     // last, with blending on and depth writes off, so the opaque scene
     // behind it shows through — same order/state as house3d_demo.cpp's
-    // solid-then-glass pass.
-    device.SetBlendEnabled(true);
-    device.SetDepthWriteEnabled(false);
+    // solid-then-glass pass. NonPremultiplied is the SrcAlpha/InvSrcAlpha
+    // blend the atlas's straight-alpha texels need.
+    device.setBlendStateProperty(BlendState::NonPremultiplied);
+    device.setDepthStencilStateProperty(DepthStencilState::DepthRead);
     for (auto& [key, renderers] : chunkRenderers_) {
         (void)key;
         for (auto& renderer : renderers) {
@@ -1910,8 +1925,8 @@ void CnaCraftGame::RenderScene(GraphicsDevice& device, const Vector3& eyeVec, co
             renderer->DrawTransparent(device, *effect_);
         }
     }
-    device.SetDepthWriteEnabled(true);
-    device.SetBlendEnabled(false);
+    device.setDepthStencilStateProperty(DepthStencilState::Default);
+    device.setBlendStateProperty(BlendState::Opaque);
 }
 
 void CnaCraftGame::CaptureScreenshot(GraphicsDevice& device) {
